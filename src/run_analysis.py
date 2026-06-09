@@ -32,6 +32,20 @@ from src.metrics import gini_stability_metric  # noqa: E402
 FIG = config.FIGURES_DIR
 
 
+def _df_to_md(df: pd.DataFrame) -> str:
+    """Render a small DataFrame as a Markdown table (no ``tabulate`` dependency)."""
+    cols = list(df.columns)
+    head = "| " + " | ".join(str(c) for c in cols) + " |"
+    sep = "| " + " | ".join("---" for _ in cols) + " |"
+
+    def _fmt(v):
+        return f"{v:.4f}" if isinstance(v, float) else str(v)
+
+    rows = ["| " + " | ".join(_fmt(v) for v in row) + " |"
+            for row in df.itertuples(index=False)]
+    return "\n".join([head, sep, *rows])
+
+
 def _load():
     booster = lgb.Booster(model_file=str(config.MODELS_DIR / "model_lgbm.txt"))
     import joblib
@@ -97,36 +111,42 @@ def main():
         report += [f"\n## Explainability (SHAP)\n_skipped: {e}_\n"]
 
     # ---------------- DiCE counterfactual ----------------
+    # The full booster needs all 734 features (incl. categoricals), which makes
+    # DiCE's perturbation search intractable. We instead fit a compact, fully
+    # numeric *surrogate* on the top-N SHAP drivers and generate actionable
+    # recourse against it — transparent and tractable.
     try:
-        from sklearn.base import BaseEstimator, ClassifierMixin
+        from lightgbm import LGBMClassifier
 
-        class _Wrap(BaseEstimator, ClassifierMixin):
-            """Adapt the LightGBM Booster to the sklearn predict_proba API DiCE needs."""
-            def __init__(self, b, cols):
-                self.b, self.cols, self.classes_ = b, cols, np.array([0, 1])
+        top_num = (pd.read_csv(config.REPORTS_DIR / "shap_importance.csv")["feature"]
+                   .tolist())
+        top_num = [c for c in top_num if c in schema["num_cols"]][:12]
+        Xtr = train[top_num].astype("float64")
+        Xtr = Xtr.fillna(Xtr.median())
+        surrogate = LGBMClassifier(n_estimators=200, num_leaves=31,
+                                   learning_rate=0.05, verbose=-1)
+        surrogate.fit(Xtr, train[config.TARGET].to_numpy())
 
-            def fit(self, X, y=None):
-                return self
-
-            def predict_proba(self, X):
-                X = pd.DataFrame(X, columns=self.cols)
-                p = self.b.predict(X)
-                return np.column_stack([1 - p, p])
-
-            def predict(self, X):
-                return (self.predict_proba(X)[:, 1] >= 0.5).astype(int)
-
-        num_only = [c for c in schema["num_cols"] if c in train.columns]
-        Xtr_num = train[num_only].fillna(train[num_only].median())
-        wrap = _Wrap(booster, num_only)
-        dice = explain.build_dice(wrap, Xtr_num, train[config.TARGET], num_only)
-        rejected = X_test[num_only][prob >= thr].head(1).fillna(Xtr_num.median())
-        cfs = explain.generate_counterfactuals(dice, rejected, total_cfs=2, desired_class=0)
+        dice = explain.build_dice(surrogate, Xtr, train[config.TARGET], top_num)
+        med = Xtr.median()
+        Xte = X_test[top_num].astype("float64").fillna(med)
+        sp = surrogate.predict_proba(Xte)[:, 1]
+        rejected = Xte[sp >= 0.5].head(1)
+        cfs = None
+        if len(rejected):
+            cfs = explain.generate_counterfactuals(
+                dice, rejected, total_cfs=3, desired_class=0)
         if cfs is not None:
             cfs.to_csv(config.REPORTS_DIR / "counterfactual_example.csv", index=False)
             report += ["\n## Counterfactual recourse (DiCE)\n",
-                       "Saved an actionable counterfactual for a rejected applicant "
-                       "to `reports/counterfactual_example.csv`.\n"]
+                       f"Actionable recourse over the top-{len(top_num)} numeric "
+                       "drivers (surrogate model): the minimal feature changes that "
+                       "flip a rejected applicant to approved are saved to "
+                       "`reports/counterfactual_example.csv`. This is the GDPR "
+                       "Art. 22 'right to explanation' in practice.\n"]
+        else:
+            report += ["\n## Counterfactual recourse (DiCE)\n"
+                       "_No counterfactual found within search budget._\n"]
     except Exception as e:
         report += [f"\n## Counterfactual recourse (DiCE)\n_skipped: {e}_\n"]
 
@@ -172,7 +192,7 @@ def main():
         plt.savefig(FIG / "reliability.png", dpi=120)
         plt.close()
         report += ["\n## Calibration\n",
-                   rep.to_markdown(index=False) + "\n",
+                   _df_to_md(rep) + "\n",
                    "![](figures/reliability.png)\n"]
     except Exception as e:
         report += [f"\n## Calibration\n_skipped: {e}_\n"]

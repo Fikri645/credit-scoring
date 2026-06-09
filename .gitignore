@@ -15,19 +15,28 @@ data/
 
 # --- Model artifacts (large) ---
 models/*.pkl
-models/*.txt
-models/*.cbm
 models/*.pt
+models/*.cbm
+models/*.txt
 models/*.joblib
+# …but keep the small LightGBM model + schema so the Gradio demo runs standalone
+!models/model_lgbm.txt
+!models/feature_schema.joblib
 !models/.gitkeep
 
 # --- MLflow ---
 mlruns/
 mlartifacts/
+mlflow.db
 
-# --- Generated reports / figures (kept selectively) ---
-reports/figures/*.png
+# --- CatBoost training scratch ---
+catboost_info/
+
+# --- Generated reports / figures (kept — small, show results on GitHub) ---
+# (figures and CSVs under reports/ ARE committed)
 artifacts/*.parquet
+# …keep the small demo sample so the Gradio app has applicants to score
+!artifacts/demo_applicants.parquet
 
 # --- Secrets ---
 .env

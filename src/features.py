@@ -41,18 +41,31 @@ from src import config
 # --------------------------------------------------------------------------- #
 # Dtype handling
 # --------------------------------------------------------------------------- #
+def _cast_exprs(schema: dict) -> list[pl.Expr]:
+    """Suffix-driven cast expressions (shared by the eager and lazy paths).
+
+    Date columns may arrive as either real temporal types or ISO strings, so
+    we branch on the source dtype: ``str.to_date`` for text, ``cast`` otherwise.
+    """
+    exprs: list[pl.Expr] = []
+    for col, dt in schema.items():
+        if col in (config.CASE_ID, "WEEK_NUM", "num_group1", "num_group2"):
+            exprs.append(pl.col(col).cast(pl.Int64, strict=False))
+        elif col == config.DATE_DECISION or col.endswith("D"):
+            if dt == pl.String:
+                exprs.append(pl.col(col).str.to_date(strict=False))
+            else:
+                exprs.append(pl.col(col).cast(pl.Date, strict=False))
+        elif col.endswith(("P", "A")):
+            exprs.append(pl.col(col).cast(pl.Float64, strict=False))
+        elif col.endswith("M"):
+            exprs.append(pl.col(col).cast(pl.String))
+    return exprs
+
+
 def set_table_dtypes(df: pl.DataFrame) -> pl.DataFrame:
     """Cast columns to memory-efficient dtypes based on the suffix convention."""
-    for col in df.columns:
-        if col in (config.CASE_ID, "WEEK_NUM", "num_group1", "num_group2"):
-            df = df.with_columns(pl.col(col).cast(pl.Int64))
-        elif col in (config.DATE_DECISION,) or col.endswith("D"):
-            df = df.with_columns(pl.col(col).cast(pl.Date, strict=False))
-        elif col.endswith(("P", "A")):
-            df = df.with_columns(pl.col(col).cast(pl.Float64, strict=False))
-        elif col.endswith(("M",)):
-            df = df.with_columns(pl.col(col).cast(pl.String))
-    return df
+    return df.with_columns(_cast_exprs(dict(df.schema)))
 
 
 def _is_numeric(dtype: pl.DataType) -> bool:
@@ -65,21 +78,13 @@ def _is_numeric(dtype: pl.DataType) -> bool:
 # --------------------------------------------------------------------------- #
 # Aggregation of depth>0 tables
 # --------------------------------------------------------------------------- #
-def aggregate_depth(df: pl.DataFrame) -> pl.DataFrame:
-    """Collapse a one-to-many depth table to one row per ``case_id``.
-
-    Numeric → max/min/mean/var/last; date → max/min/last; string → last +
-    n_unique. ``num_group*`` index columns are dropped after producing a row
-    count so the model still sees *how many* records each applicant has.
-    """
-    group_cols = [config.CASE_ID]
-    index_cols = {"num_group1", "num_group2"}
-
+def _agg_exprs(schema: dict) -> list[pl.Expr]:
+    """Build the per-case aggregation expressions from a table schema."""
+    index_cols = {config.CASE_ID, "num_group1", "num_group2"}
     exprs: list[pl.Expr] = [pl.len().alias("num_records")]
-    for col in df.columns:
-        if col in group_cols or col in index_cols:
+    for col, dtype in schema.items():
+        if col in index_cols:
             continue
-        dtype = df.schema[col]
         if dtype == pl.Date:
             exprs += [
                 pl.col(col).max().alias(f"{col}_max"),
@@ -99,7 +104,17 @@ def aggregate_depth(df: pl.DataFrame) -> pl.DataFrame:
                 pl.col(col).drop_nulls().last().alias(f"{col}_last"),
                 pl.col(col).n_unique().alias(f"{col}_nunique"),
             ]
-    return df.group_by(group_cols).agg(exprs)
+    return exprs
+
+
+def aggregate_depth(df: pl.DataFrame) -> pl.DataFrame:
+    """Collapse a one-to-many depth table to one row per ``case_id``.
+
+    Numeric → max/min/mean/var/last; date → max/min/last; string → last +
+    n_unique. ``num_group*`` index columns are dropped after producing a row
+    count so the model still sees *how many* records each applicant has.
+    """
+    return df.group_by([config.CASE_ID]).agg(_agg_exprs(dict(df.schema)))
 
 
 # --------------------------------------------------------------------------- #
@@ -162,48 +177,96 @@ def prune_columns(
 # --------------------------------------------------------------------------- #
 # Pipeline driver
 # --------------------------------------------------------------------------- #
-def _depth_of(path: Path) -> int:
-    """Infer table depth from the Kaggle filename convention ``*_<depth>[_n].parquet``."""
-    stem = path.stem  # e.g. train_credit_bureau_a_2_0
-    for part in reversed(stem.split("_")):
-        if part.isdigit():
-            return int(part) if int(part) <= 2 else 1
-    return 0
+def _parse_table(stem: str) -> tuple[str, int]:
+    """Map a parquet stem to its ``(logical_name, depth)``.
+
+    The Kaggle convention is ``{name}_{depth}`` for unsharded tables and
+    ``{name}_{depth}_{shard}`` for sharded ones. A single trailing number is
+    therefore the *depth*; two trailing numbers are *depth* then *shard*. This
+    disambiguates e.g. ``train_tax_registry_a_1`` (depth 1, no shard) from
+    ``train_credit_bureau_a_2_10`` (depth 2, shard 10).
+    """
+    parts = stem.split("_")
+    if len(parts) >= 2 and parts[-1].isdigit() and parts[-2].isdigit():
+        depth = int(parts[-2])                      # name_depth_shard
+        logical = "_".join(parts[:-1])
+    elif parts[-1].isdigit():
+        depth = int(parts[-1])                      # name_depth
+        logical = stem
+    else:
+        depth = 0
+        logical = stem
+    return logical, min(depth, 2)
+
+
+def _shrink(tbl: pl.DataFrame) -> pl.DataFrame:
+    """Bound memory before joining: Float64 -> Float32 and drop all-null cols.
+
+    Halving float width and discarding columns that are entirely null keeps the
+    final ~1.5M-row wide table within RAM on a 32 GB machine without losing any
+    informative signal.
+    """
+    f32 = [pl.col(c).cast(pl.Float32) for c, t in tbl.schema.items() if t == pl.Float64]
+    if f32:
+        tbl = tbl.with_columns(f32)
+    keep = [c for c in tbl.columns
+            if c == config.CASE_ID or tbl[c].null_count() < tbl.height]
+    return tbl.select(keep)
+
+
+def _scan_logical(paths: list[Path]) -> pl.LazyFrame:
+    """Lazily scan + dtype-cast all shards of one logical table.
+
+    Uses ``scan_parquet`` so the multi-GB depth-2 tables are never fully
+    materialised in memory — the downstream group-by is executed in streaming
+    mode instead.
+    """
+    lfs = []
+    for p in paths:
+        lf = pl.scan_parquet(p)
+        lf = lf.with_columns(_cast_exprs(dict(lf.collect_schema())))
+        lfs.append(lf)
+    return pl.concat(lfs, how="diagonal_relaxed")
 
 
 def build_feature_table(split_dir: Path, is_train: bool = True) -> pl.DataFrame:
-    """Read every parquet shard for a split, aggregate, and join onto base.
+    """Scan every parquet shard for a split, aggregate, and join onto base.
 
-    Returns a single wide one-row-per-case_id Polars frame ready for modelling.
+    Heavy depth tables are aggregated with the Polars **streaming** engine to
+    stay within RAM on a 32 GB machine. Returns a single wide
+    one-row-per-case_id frame ready for modelling.
     """
     prefix = "train" if is_train else "test"
     base = pl.read_parquet(split_dir / f"{prefix}_base.parquet").pipe(set_table_dtypes)
 
-    # Group shard files by their logical table name (strip the trailing _<n>).
+    # Group shard files by their logical table name and remember the depth.
     shards: dict[str, list[Path]] = {}
+    depths: dict[str, int] = {}
     for p in sorted(split_dir.glob(f"{prefix}_*.parquet")):
         if p.name == f"{prefix}_base.parquet":
             continue
-        # logical name without the final numeric shard index
-        parts = p.stem.split("_")
-        logical = "_".join(parts[:-1]) if parts[-1].isdigit() else p.stem
+        logical, depth = _parse_table(p.stem)
         shards.setdefault(logical, []).append(p)
-
-    feature_frames: list[pl.DataFrame] = []
-    for logical, paths in shards.items():
-        depth = _depth_of(paths[0])
-        # Concatenate shards of the same logical table, then aggregate if needed.
-        frames = [pl.read_parquet(p).pipe(set_table_dtypes) for p in paths]
-        tbl = pl.concat(frames, how="diagonal_relaxed")
-        if depth > 0:
-            tbl = aggregate_depth(tbl)
-        # Prefix non-key columns to avoid collisions across tables.
-        rename = {c: f"{logical}__{c}" for c in tbl.columns if c != config.CASE_ID}
-        feature_frames.append(tbl.rename(rename))
+        depths[logical] = depth
 
     df = base
-    for fr in feature_frames:
-        df = df.join(fr, on=config.CASE_ID, how="left")
+    for logical, paths in shards.items():
+        depth = depths[logical]
+        lf = _scan_logical(paths)
+        if depth > 0:
+            lf = lf.group_by([config.CASE_ID]).agg(_agg_exprs(dict(lf.collect_schema())))
+        # Streaming collect keeps peak memory bounded on the huge bureau tables.
+        try:
+            tbl = lf.collect(engine="streaming")
+        except TypeError:  # older Polars
+            tbl = lf.collect(streaming=True)
+        tbl = _shrink(tbl)
+        rename = {c: f"{logical}__{c}" for c in tbl.columns if c != config.CASE_ID}
+        tbl = tbl.rename(rename)
+        df = df.join(tbl, on=config.CASE_ID, how="left")
+        print(f"[features]   joined {logical:<28} (+{tbl.width - 1} cols, "
+              f"{tbl.height} rows) -> {df.width} total cols")
+        del tbl
 
     df = dates_to_relative(df)
     return df

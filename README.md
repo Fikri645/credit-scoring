@@ -132,11 +132,53 @@ table (default `0.30`); set it to `1.0` for the full competition run.
 
 ## Results
 
-Generated into [`reports/results.md`](reports/results.md) by `src/run_analysis.py`
-(numbers depend on `SAMPLE_FRAC` and are reproduced on each run). The report
-includes the test Gini-stability and its components, the cost-optimal threshold
-saving vs 0.5, SHAP global importance, a calibration table (raw vs Platt vs
-isotonic ECE/Brier), the fairness gaps, and the survival C-index.
+Full report regenerated on every run into [`reports/results.md`](reports/results.md).
+Representative numbers from a `SAMPLE_FRAC = 0.30` run (≈458k applications,
+forward-in-time test split):
+
+### Model bake-off — Gini stability metric
+
+| Model | Gini-stability | Mean Gini |
+|:--|:--:|:--:|
+| LightGBM (`is_unbalance`) | 0.642 | 0.664 |
+| **LightGBM (focal loss, autograd)** | **0.676** | 0.696 |
+| **CatBoost** 🏆 | **0.694** | 0.716 |
+
+The custom **focal-loss objective beats naive class weighting by +0.034
+stability** — the imbalance thesis of the 2024-2026 literature, reproduced.
+
+### Business-cost decision threshold
+
+Cost-optimal threshold **0.813** vs the naive 0.5 → **53.9 % lower expected
+cost** on the test set.
+
+### Calibration — isotonic wins (as the 2026 literature predicts)
+
+| Method | Brier | ECE |
+|:--|:--:|:--:|
+| raw model | 0.126 | 0.254 |
+| Platt scaling | 0.020 | 0.0016 |
+| **Isotonic regression** | **0.019** | **0.0009** |
+
+### Fairness (gender)
+
+Demographic-parity gap **0.009**, equalized-odds gap **0.061**.
+
+> [!warning] Honest finding
+> The single largest SHAP feature is **`sex_738L` (gender)** — the model leans
+> on a *protected attribute*. In production this would be illegal in most
+> jurisdictions; the fairness audit exists precisely to surface this, and the
+> `ThresholdOptimizer` / drop-protected-attribute paths are the remedies.
+
+### Survival (Cox PH, time-to-default)
+
+Harrell **C-index 0.639** — lifetime-PD signal for IFRS 9 / Basel IRB beyond
+the binary classifier.
+
+### Recourse (DiCE)
+
+Generates the minimal feature changes that flip a rejected applicant to
+approved (`reports/counterfactual_example.csv`) — GDPR Art. 22 in practice.
 
 ---
 

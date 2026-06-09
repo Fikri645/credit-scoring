@@ -62,11 +62,22 @@ class ScoreResponse(BaseModel):
 
 
 def _build_row(features: dict[str, Any]) -> pd.DataFrame:
+    """Assemble a one-row frame, enforcing the training schema's dtypes.
+
+    Reconstructing a single row from JSON yields ``object`` columns wherever a
+    value is missing, which LightGBM rejects. We therefore coerce numeric
+    features to float and categoricals to ``category`` regardless of payload
+    completeness, so a partial request still scores.
+    """
     cols = _SCHEMA["feat_cols"]
+    cat = set(_SCHEMA["cat_cols"])
     row = {c: features.get(c, np.nan) for c in cols}
     df = pd.DataFrame([row])
-    for c in _SCHEMA["cat_cols"]:
-        df[c] = df[c].astype("category")
+    for c in cols:
+        if c in cat:
+            df[c] = df[c].astype("category")
+        else:
+            df[c] = pd.to_numeric(df[c], errors="coerce").astype("float64")
     return df[cols]
 
 

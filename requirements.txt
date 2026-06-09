@@ -46,9 +46,10 @@ pytest-cov>=5.0
 flake8>=7.0
 
 # --- Data download ---
-# Pinned to the last 1.x release: kaggle 2.x switched to OAuth and dropped
-# classic kaggle.json (username/key) auth used by this project.
-kaggle==1.6.17
+# kagglehub is the current official client; it authenticates with a modern
+# access token (KGAT_...) via the KAGGLE_API_TOKEN env var or
+# ~/.kaggle/access_token, and downloads competition data on Kaggle's v2 API.
+kagglehub>=0.4.1
 
 # --- Misc ---
 joblib>=1.3

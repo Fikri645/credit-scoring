@@ -2,7 +2,20 @@
 import polars as pl
 
 from src import config
-from src.features import aggregate_depth, dates_to_relative, prune_columns
+from src.features import aggregate_depth, dates_to_relative, prune_columns, _parse_table
+
+
+def test_parse_table_depth_and_logical():
+    # name_depth_shard  → depth from 2nd-to-last number
+    assert _parse_table("train_credit_bureau_a_2_10") == ("train_credit_bureau_a_2", 2)
+    assert _parse_table("train_applprev_1_0") == ("train_applprev_1", 1)
+    assert _parse_table("train_static_0_1") == ("train_static_0", 0)
+    # name_depth  → single trailing number is the depth (no shard)
+    assert _parse_table("train_tax_registry_a_1") == ("train_tax_registry_a_1", 1)
+    assert _parse_table("train_applprev_2") == ("train_applprev_2", 2)
+    assert _parse_table("train_person_2") == ("train_person_2", 2)
+    # no trailing number → static depth 0
+    assert _parse_table("train_static_cb_0") == ("train_static_cb_0", 0)
 
 
 def test_aggregate_depth_one_row_per_case():
