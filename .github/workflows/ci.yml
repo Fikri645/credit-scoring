@@ -25,7 +25,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Lint (flake8)
-        run: flake8 src api tests --max-line-length=100 --extend-ignore=E203,W503
+        run: flake8 src api tests app.py    # config in setup.cfg
 
       - name: Unit tests (no dataset required)
         run: pytest tests/ -v --cov=src --cov-report=term-missing
