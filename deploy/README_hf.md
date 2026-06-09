@@ -8,7 +8,7 @@ sdk_version: 5.9.1
 app_file: app.py
 pinned: false
 license: mit
-short_description: Credit default scoring (Home Credit 2024) with SHAP explanations
+short_description: Credit default scoring with SHAP explanations
 ---
 
 # Credit Default Scoring — Home Credit 2024
