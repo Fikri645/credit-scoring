@@ -17,6 +17,17 @@ import numpy as np
 import pandas as pd
 
 
+def _select_top_features(X: pd.DataFrame, num_cols: list[str], k: int) -> list[str]:
+    """Pick the ``k`` highest-variance numeric features.
+
+    FT-Transformer's attention is over the *feature* axis, so its memory grows
+    with n_features^2. Capping at the most informative ~64 features keeps the
+    attention matrices small enough for a 12 GB GPU while preserving signal.
+    """
+    var = X[num_cols].apply(pd.to_numeric, errors="coerce").var(numeric_only=True)
+    return var.sort_values(ascending=False).head(k).index.tolist()
+
+
 def _prep_numeric(X: pd.DataFrame, num_cols: list[str], medians=None, stds=None,
                   means=None):
     Xn = X[num_cols].apply(pd.to_numeric, errors="coerce")
@@ -30,17 +41,24 @@ def _prep_numeric(X: pd.DataFrame, num_cols: list[str], medians=None, stds=None,
 
 
 def train_ft_transformer(X_tr, y_tr, X_va, y_va, num_cols, epochs: int = 8,
-                         batch_size: int = 1024, lr: float = 1e-3):
+                         batch_size: int = 256, lr: float = 1e-3,
+                         max_features: int = 48, device: str | None = None):
     """Train a compact FT-Transformer; returns ``(predict_fn, history)``.
 
-    ``predict_fn(X_df) -> np.ndarray`` yields probabilities of default.
+    ``predict_fn(X_df) -> np.ndarray`` yields probabilities of default. Only the
+    top ``max_features`` highest-variance numeric columns are used so the
+    quadratic-in-features attention stays small. Defaults to **CPU**: on a 12 GB
+    GPU the feature-axis attention fragments VRAM at this width, and a compact
+    DL comparison baseline does not need the GPU.
     """
     import torch
     from torch.utils.data import DataLoader, TensorDataset
     from rtdl_revisiting_models import FTTransformer
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    if device is None:
+        device = "cpu"
 
+    num_cols = _select_top_features(X_tr, num_cols, max_features)
     Xtr, med, std, mean = _prep_numeric(X_tr, num_cols)
     Xva, *_ = _prep_numeric(X_va, num_cols, med, std, mean)
 

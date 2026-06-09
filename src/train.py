@@ -159,6 +159,23 @@ def main():
         print(f"[train] catboost       stability={s['stability']:.4f} "
               f"mean_gini={s['mean_gini']:.4f}")
 
+    # --- 4. FT-Transformer (tabular DL comparison) --------------------------
+    # Honest baseline: modern tabular DL vs gradient boosting. Guarded so a GPU
+    # OOM or missing CUDA never breaks the canonical GBT bake-off.
+    try:
+        from src.ft_transformer import train_ft_transformer
+        with mlflow.start_run(run_name="ft_transformer"):
+            predict_fn, hist = train_ft_transformer(
+                tr[feat_cols], y_tr, va[feat_cols], y_va, num_cols, epochs=8)
+            prob = predict_fn(te[feat_cols])
+            s = gini_stability_metric(_score_frame(te, y_te, prob))
+            mlflow.log_metrics(s)
+            results["ft_transformer"] = s
+            print(f"[train] ft_transformer  stability={s['stability']:.4f} "
+                  f"mean_gini={s['mean_gini']:.4f}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[train] ft_transformer skipped: {e}")
+
     # --- pick & persist the winner ------------------------------------------
     best = max(results, key=lambda k: results[k]["stability"])
     print(f"[train] BEST = {best}  ({results[best]['stability']:.4f})")

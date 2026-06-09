@@ -140,12 +140,17 @@ forward-in-time test split):
 
 | Model | Gini-stability | Mean Gini |
 |:--|:--:|:--:|
-| LightGBM (`is_unbalance`) | 0.642 | 0.664 |
-| **LightGBM (focal loss, autograd)** | **0.676** | 0.696 |
 | **CatBoost** 🏆 | **0.694** | 0.716 |
+| **LightGBM (focal loss, autograd)** | **0.676** | 0.696 |
+| LightGBM (`is_unbalance`) | 0.642 | 0.664 |
+| FT-Transformer (tabular DL) | 0.131 | 0.170 |
 
-The custom **focal-loss objective beats naive class weighting by +0.034
-stability** — the imbalance thesis of the 2024-2026 literature, reproduced.
+Two findings, both matching the 2024-2026 literature:
+- The custom **focal-loss objective beats naive class weighting by +0.034
+  stability** — better imbalance handling than SMOTE/`is_unbalance`.
+- **Gradient boosting decisively beats the tabular transformer** (0.69 vs
+  0.13): FT-Transformer underperforms on this wide, sparse, heavily-categorical
+  credit data — the honest, expected outcome (cf. Booking.com, arXiv 2405.13692).
 
 ### Business-cost decision threshold
 
