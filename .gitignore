@@ -1,0 +1,38 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# --- Virtual env ---
+.venv/
+venv/
+
+# --- Data (large; download via scripts/download_data.py) ---
+data/
+!data/.gitkeep
+
+# --- Model artifacts (large) ---
+models/*.pkl
+models/*.txt
+models/*.cbm
+models/*.pt
+models/*.joblib
+!models/.gitkeep
+
+# --- MLflow ---
+mlruns/
+mlartifacts/
+
+# --- Generated reports / figures (kept selectively) ---
+reports/figures/*.png
+artifacts/*.parquet
+
+# --- Secrets ---
+.env
+*.key
+
+# --- OS ---
+.DS_Store
+Thumbs.db
