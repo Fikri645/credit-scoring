@@ -1,0 +1,12 @@
+# Lean dependency set for the HuggingFace Spaces Gradio demo.
+# The demo only loads the LightGBM model + SHAP; it does NOT need torch,
+# catboost, mlflow, lifelines, fairlearn, dice-ml or polars, so we keep the
+# Space image small and fast to build.
+gradio>=4.40
+lightgbm>=4.3,<4.6
+shap>=0.44
+scikit-learn>=1.4,<1.6
+pandas>=2.1,<2.3
+numpy>=1.26,<2.0
+pyarrow>=16.0
+joblib>=1.3

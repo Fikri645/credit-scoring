@@ -187,6 +187,21 @@ approved (`reports/counterfactual_example.csv`) — GDPR Art. 22 in practice.
 
 ---
 
+## Deploy the demo to HuggingFace Spaces
+
+A lean, deploy-ready setup lives in `deploy/`:
+
+```bash
+pip install huggingface_hub
+set HF_TOKEN=hf_xxx                 # a write token from huggingface.co/settings/tokens
+python deploy/deploy_hf_space.py fikri0o0/credit-scoring
+```
+
+This creates a Gradio Space (free CPU) and uploads only what the demo needs
+(LightGBM model, feature schema, demo applicants, `app.py`, minimal `src/`, a
+lean `requirements.txt`, and the Space `README.md`). The full requirements set
+is not needed at serving time — the demo only loads LightGBM + SHAP.
+
 ## Testing
 
 ```bash

@@ -100,5 +100,8 @@ def build_ui():
     return demo
 
 
+# Module-level `demo` is the convention HuggingFace Spaces looks for.
+demo = build_ui()
+
 if __name__ == "__main__":
-    build_ui().launch()
+    demo.launch()
