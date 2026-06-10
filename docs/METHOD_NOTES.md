@@ -53,6 +53,20 @@ Binary classifiers cannot answer *when* a default happens, which IFRS 9 ECL and
 Basel IRB lifetime-PD curves require (MDPI Risks, 2025). We fit a penalised
 **Cox PH** model (`src/survival.py`) and report Harrell's C-index.
 
+## 9. Considered but out of scope
+Methods that were on the 2024–2026 research short-list and deliberately *not*
+shipped, with the reason — included to show the design space was surveyed, not
+that these were missed:
+
+| Method | What it adds | Why out of scope here |
+|:--|:--|:--|
+| **TabPFN-2** | Zero-shot prior-fitted transformer; strong on *small* tabular data | Capped at ~10k rows / ~100 features — this dataset is 1.5M × 730, its worst case |
+| **LDAM loss** | Label-distribution-aware margins for imbalance | Focal loss already covers the imbalance axis; LDAM's margin schedule adds tuning surface for marginal gain |
+| **NICE counterfactuals** | Faster nearest-instance recourse | DiCE already delivers diverse, actionable recourse; NICE would be a speed swap, not a capability gain |
+| **Venn-Abers predictors** | Calibration with validity guarantees | Isotonic + ECE/reliability is sufficient for the pricing story; Venn-Abers is a heavier dependency for a portfolio demo |
+| **DeepHit** | Discrete-time neural survival, competing risks | Cox PH is the interpretable, regulator-legible baseline; DeepHit needs far more data/tuning to beat it here |
+| **AutoGluon ensemble** | Stacked multi-layer AutoML | Obscures the explicit model-vs-model comparison this project is built to *show* |
+
 ## Key references
 - Home Credit — Credit Risk Model Stability (Kaggle, 2024)
 - Lin et al., *Focal Loss for Dense Object Detection* (2017)

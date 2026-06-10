@@ -3,7 +3,7 @@
 Loads the persisted weighted-LightGBM model and the forward-in-time test
 split, then produces every figure and a consolidated ``reports/results.md``:
 
-* SHAP global importance (beeswarm + bar) and one local waterfall.
+* SHAP global importance (bar) + exact pairwise interaction values.
 * DiCE counterfactual for a rejected applicant.
 * Fairness audit on gender (demographic parity vs equalized odds) +
   ThresholdOptimizer mitigation.
@@ -110,6 +110,49 @@ def main():
     except Exception as e:
         report += [f"\n## Explainability (SHAP)\n_skipped: {e}_\n"]
 
+    # ---------------- SHAP pairwise interactions ----------------
+    # Exact interactions need a model SHAP can hand a column subset to; the full
+    # booster requires all 730 features, so we fit a compact numeric surrogate
+    # on the top-8 numeric drivers (same approach as the DiCE recourse) and
+    # compute the exact interaction tensor on it.
+    try:
+        from lightgbm import LGBMClassifier
+
+        top8 = (pd.read_csv(config.REPORTS_DIR / "shap_importance.csv")["feature"]
+                .tolist())
+        top8 = [c for c in top8 if c in schema["num_cols"]][:8]
+        Xi = train[top8].astype("float64")
+        Xi = Xi.fillna(Xi.median())
+        sur_i = LGBMClassifier(n_estimators=200, num_leaves=31,
+                               learning_rate=0.05, verbose=-1)
+        sur_i.fit(Xi, train[config.TARGET].to_numpy())
+        Xi_te = (X_test[top8].astype("float64").fillna(Xi.median())
+                 .sample(min(1500, len(X_test)), random_state=config.RANDOM_STATE))
+        inter = explain.top_interactions(sur_i, Xi_te)
+        inter.to_csv(config.REPORTS_DIR / "shap_interactions.csv", index=False)
+
+        def _short(name):  # strip table prefix + agg suffix for readability
+            return name.replace("train_", "").split("__")[-1]
+
+        top5 = inter.head(5)
+        plt.figure(figsize=(7, 4))
+        labels = [f"{_short(a)}\n× {_short(b)}"
+                  for a, b in zip(top5["feature_a"], top5["feature_b"])]
+        plt.barh(labels[::-1], top5["mean_abs_interaction"][::-1], color="#9333ea")
+        plt.xlabel("mean |SHAP interaction|")
+        plt.title("Strongest pairwise feature interactions")
+        plt.tight_layout()
+        plt.savefig(FIG / "shap_interactions.png", dpi=120)
+        plt.close()
+        pairs = "; ".join(f"{_short(r.feature_a)} × {_short(r.feature_b)}"
+                          for r in top5.head(3).itertuples(index=False))
+        report += ["\n## Feature interactions (SHAP interaction values)\n",
+                   "Exact pairwise SHAP interaction values over the top-8 drivers. "
+                   f"Strongest: {pairs}. Full ranking in `shap_interactions.csv`.\n",
+                   "![](figures/shap_interactions.png)\n"]
+    except Exception as e:
+        report += [f"\n## Feature interactions (SHAP)\n_skipped: {e}_\n"]
+
     # ---------------- DiCE counterfactual ----------------
     # The full booster needs all 734 features (incl. categoricals), which makes
     # DiCE's perturbation search intractable. We instead fit a compact, fully
@@ -166,6 +209,46 @@ def main():
                        "- These two criteria cannot both be zero when base rates "
                        "differ (Kleinberg et al., 2016) — the choice is a policy "
                        "decision. See `fairness_by_group.csv`.\n"]
+
+            # ---- ThresholdOptimizer post-hoc mitigation ----
+            # Fairlearn validates X as numeric, and the booster needs all 730
+            # (categorical-laden) features, so we feed the optimiser the model
+            # *score* as a 1-column numeric X via a trivial pass-through
+            # estimator. It then fits per-group thresholds without retraining.
+            # Fit + evaluate in-sample on the test split (a demonstration of the
+            # mechanism, not a held-out generalisation claim).
+            try:
+                class _ScoreProba:
+                    _estimator_type = "classifier"
+                    classes_ = np.array([0, 1])
+
+                    def fit(self, X, y=None):
+                        return self
+
+                    def predict_proba(self, X):
+                        s = np.asarray(X).reshape(-1)
+                        return np.column_stack([1.0 - s, s])
+
+                    def predict(self, X):
+                        return (np.asarray(X).reshape(-1) >= 0.5).astype(int)
+
+                Xscore = prob.reshape(-1, 1)
+                opt = fairness.mitigate_with_threshold_optimizer(
+                    _ScoreProba(), Xscore, y_test, gender,
+                    constraint="equalized_odds", random_state=config.RANDOM_STATE)
+                y_mit = opt.predict(Xscore, sensitive_features=gender,
+                                    random_state=config.RANDOM_STATE)
+                fm_mit = fairness.fairness_metrics(y_test, y_mit, gender)
+                report += [
+                    "\n**Mitigation — Fairlearn `ThresholdOptimizer` "
+                    "(equalized-odds, per-group thresholds, no retraining):**\n",
+                    f"- Equalized-odds gap: **{fm['equalized_odds_diff']:.4f}** "
+                    f"-> **{fm_mit['equalized_odds_diff']:.4f}** after mitigation.\n",
+                    f"- Demographic-parity gap: {fm['demographic_parity_diff']:.4f} "
+                    f"-> {fm_mit['demographic_parity_diff']:.4f} (in-sample "
+                    "demonstration of the post-processing mechanism).\n"]
+            except Exception as e:
+                report += [f"\n_ThresholdOptimizer mitigation skipped: {e}_\n"]
         except Exception as e:
             report += [f"\n## Fairness audit\n_skipped: {e}_\n"]
     else:

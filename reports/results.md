@@ -15,6 +15,13 @@ Top features: train_person_1__sex_738L_last, train_applprev_1__district_544M_las
 ![](figures/shap_importance.png)
 
 
+## Feature interactions (SHAP interaction values)
+
+Exact pairwise SHAP interaction values over the top-8 drivers. Strongest: pmts_dpd_303P_mean × numberofoverdueinstlmax_1151L_var; dpdmaxdateyear_596T_mean × numberofoverdueinstlmax_1151L_var; maxdpdtolerance_577P_mean × numberofoverdueinstlmax_1151L_var. Full ranking in `shap_interactions.csv`.
+
+![](figures/shap_interactions.png)
+
+
 ## Counterfactual recourse (DiCE)
 
 Actionable recourse over the top-12 numeric drivers (surrogate model): the minimal feature changes that flip a rejected applicant to approved are saved to `reports/counterfactual_example.csv`. This is the GDPR Art. 22 'right to explanation' in practice.
@@ -27,6 +34,13 @@ Actionable recourse over the top-12 numeric drivers (surrogate model): the minim
 - Equalized-odds difference = **0.0607**
 
 - These two criteria cannot both be zero when base rates differ (Kleinberg et al., 2016) — the choice is a policy decision. See `fairness_by_group.csv`.
+
+
+**Mitigation — Fairlearn `ThresholdOptimizer` (equalized-odds, per-group thresholds, no retraining):**
+
+- Equalized-odds gap: **0.0607** -> **0.0000** after mitigation.
+
+- Demographic-parity gap: 0.0094 -> 0.0000 (in-sample demonstration of the post-processing mechanism).
 
 
 ## Calibration

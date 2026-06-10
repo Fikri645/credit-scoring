@@ -62,6 +62,44 @@ def local_explanation(explainer, x_row: pd.DataFrame, top_k: int = 10) -> pd.Dat
     )
 
 
+def top_interactions(model, X: pd.DataFrame) -> pd.DataFrame:
+    """Rank pairwise SHAP interactions over a compact numeric driver block.
+
+    Full SHAP interaction values are O(T·L·D²·F²) and the production booster
+    requires *all* 730 features at once (you cannot hand SHAP a column subset),
+    so exact interactions across the full space are intractable. We instead fit
+    a small numeric **surrogate** on the dominant drivers (same pattern the DiCE
+    recourse uses) and compute the exact interaction tensor on it. ``X`` is the
+    already-subset numeric frame; ``model`` is the surrogate fitted on it.
+
+    Returns the off-diagonal pairs ranked by mean |interaction| — the
+    pairwise-interaction documentation the EU AI Act expects for a high-risk
+    system.
+    """
+    import shap
+
+    cols = list(X.columns)
+    explainer = shap.TreeExplainer(model)
+    inter = explainer.shap_interaction_values(X)
+    if isinstance(inter, list):
+        inter = inter[1]
+    mean_abs = np.abs(np.asarray(inter)).mean(axis=0)   # (k, k)
+
+    rows = []
+    for a in range(len(cols)):
+        for b in range(a + 1, len(cols)):               # off-diagonal pairs only
+            rows.append({
+                "feature_a": cols[a],
+                "feature_b": cols[b],
+                "mean_abs_interaction": float(mean_abs[a, b]),
+            })
+    return (
+        pd.DataFrame(rows)
+        .sort_values("mean_abs_interaction", ascending=False)
+        .reset_index(drop=True)
+    )
+
+
 # --------------------------------------------------------------------------- #
 # DiCE counterfactuals
 # --------------------------------------------------------------------------- #

@@ -94,13 +94,17 @@ python -m src.features
 # 4. Train + compare models (logs to MLflow, saves winner to models/)
 python -m src.train
 
-# 5. Full analysis: SHAP, DiCE, fairness, calibration, survival → reports/
+# 5. EDA report (imbalance, missingness, temporal drift) → reports/eda.md
+python -m src.eda
+
+# 6. Full analysis: SHAP + interactions, DiCE, fairness + mitigation,
+#    calibration, survival → reports/results.md
 python -m src.run_analysis
 
-# 6a. Serve the REST API
+# 7a. Serve the REST API
 uvicorn api.main:app --reload          #  POST /score
 
-# 6b. …or the interactive Gradio demo
+# 7b. …or the interactive Gradio demo
 python app.py                          #  http://localhost:7860
 ```
 
@@ -115,6 +119,7 @@ table (default `0.30`); set it to `1.0` for the full competition run.
 |:--|:--|
 | `src/config.py` | Paths, competition slug, modelling + cost constants |
 | `src/download_data.py` | Kaggle API download + unzip |
+| `src/eda.py` | Reproducible EDA → `reports/eda.md` (imbalance, missingness, drift) |
 | `src/features.py` | Polars feature engineering (aggregation, date transform, pruning) |
 | `src/metrics.py` | Gini-stability metric, Expected Calibration Error |
 | `src/modeling.py` | Time split, categorical prep, **focal-loss autograd objective** |
@@ -167,7 +172,10 @@ cost** on the test set.
 
 ### Fairness (gender)
 
-Demographic-parity gap **0.009**, equalized-odds gap **0.061**.
+Demographic-parity gap **0.009**, equalized-odds gap **0.061**. Fairlearn's
+**`ThresholdOptimizer`** (per-group thresholds, no retraining) closes the
+equalized-odds gap to **≈0.000** in-sample — a demonstration of the
+post-processing remedy, not a held-out generalisation claim.
 
 > [!warning] Honest finding
 > The single largest SHAP feature is **`sex_738L` (gender)** — the model leans
@@ -184,6 +192,18 @@ the binary classifier.
 
 Generates the minimal feature changes that flip a rejected applicant to
 approved (`reports/counterfactual_example.csv`) — GDPR Art. 22 in practice.
+
+### Feature interactions (SHAP interaction values)
+
+Exact pairwise SHAP interaction values over the dominant numeric drivers
+(`reports/shap_interactions.csv`). The strongest interactions are all between
+delinquency signals — days-past-due metrics × overdue-installment counts —
+which is the credit-intuitive result. (Computed on a compact numeric surrogate,
+since the full booster requires all 730 features at once.)
+
+> EDA report — target imbalance, missingness, and the **weekly default-rate
+> drift** that motivates the stability metric — is regenerated into
+> [`reports/eda.md`](reports/eda.md) via `python -m src.eda`.
 
 ---
 
